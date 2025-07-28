@@ -6,7 +6,7 @@ author_url: https://github.com/jrkropp
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.6.3
-version: 0.8.19
+version: 0.8.20
 license: MIT
 """
 
@@ -483,6 +483,13 @@ class Pipe:
             default="auto",
             description="Truncation strategy for model responses. 'auto' drops middle context items if the conversation exceeds the context window; 'disabled' returns a 400 error instead.",
         )
+        CITATION_STYLE: Literal["number", "name"] = Field(
+            default="number",
+            description=(
+                "Inline citation marker style: 'number' shows numeric markers like [1];"
+                " 'name' uses the source title or filename instead."
+            ),
+        )
         MAX_TOOL_CALLS: Optional[int] = Field(
             default=None,
             description=(
@@ -685,6 +692,7 @@ class Pipe:
         total_usage: dict[str, Any] = {}
         url_to_no: dict[str, int] = {}
         next_no: int = 1
+        shift = 0
         emitted_citations: list[dict] = []
 
         status_indicator = ExpandableStatusIndicator(event_emitter) # Custom class for simplifying the <details> expandable status updates
@@ -729,16 +737,11 @@ class Pipe:
                         anno = event["annotation"]
                         a_type = anno.get("type")
 
-                        if a_type == "url_citation":
-                            clean_url = (anno.get("url") or "").split("?")[0]
-                            key = clean_url
-                        elif a_type == "file_citation":
-                            key = f"file:{anno.get('file_id', anno.get('filename'))}"
-                        elif a_type == "container_file_citation":
-                            key = f"container:{anno.get('container_id')}:{anno.get('file_id')}"
-                        else:
-                            key = json.dumps(anno, sort_keys=True)
-
+                        key = (
+                            (anno.get("url") or "").split("?")[0]
+                            if a_type == "url_citation"
+                            else a_type
+                        )
                         if key in url_to_no:
                             n = url_to_no[key]
                         else:
@@ -747,42 +750,41 @@ class Pipe:
                             next_no += 1
 
                             if a_type == "url_citation":
-                                title = anno.get("title") or clean_url
+                                title = anno.get("title") or key
                                 citation_payload = {
                                     "document": [title],
-                                    "metadata": [{"ordinal": n, "source": title}],
-                                    "source": {"name": clean_url, "url": clean_url},
-                                }
-                            elif a_type == "file_citation":
-                                fname = anno.get("filename", "file")
-                                quote = anno.get("quote") or anno.get("text") or "Referenced file"
-                                citation_payload = {
-                                    "document": [quote],
-                                    "metadata": [{"ordinal": n, "file_id": anno.get("file_id")}],
-                                    "source": {"name": fname},
-                                }
-                            elif a_type == "container_file_citation":
-                                fname = anno.get("filename", "output file")
-                                citation_payload = {
-                                    "document": [f"Generated file: {fname}"],
-                                    "metadata": [{"ordinal": n,
-                                                  "container_id": anno.get("container_id"),
-                                                  "file_id": anno.get("file_id")}],
-                                    "source": {"name": fname},
+                                    "metadata": [{"ordinal": n}],
+                                    "source": {"name": title, "url": key},
                                 }
                             else:
                                 citation_payload = {
-                                    "document": ["Unsupported citation type"],
+                                    "document": [json.dumps(anno, ensure_ascii=False)],
                                     "metadata": [{"ordinal": n}],
                                     "source": {"name": a_type},
                                 }
-
                             await event_emitter({"type": "citation", "data": citation_payload})
                             emitted_citations.append(citation_payload)
 
-                        assistant_message += f" [{n}]"
-                        await event_emitter({"type": "chat:message",
-                                             "data": {"content": assistant_message}})
+                        display = str(n)
+                        if valves.CITATION_STYLE == "name":
+                            if a_type == "url_citation":
+                                display = anno.get("title") or key
+                            elif a_type == "file_citation":
+                                display = anno.get("filename") or "file"
+                            elif a_type == "container_file_citation":
+                                display = anno.get("filename") or "file"
+                            else:
+                                display = a_type
+
+                        start = anno["start_index"] - shift
+                        end = anno["end_index"] - shift
+                        marker = f" [{display}]"
+                        assistant_message = (
+                            assistant_message[:start] + marker + assistant_message[end:]
+                        )
+                        shift += (end - start) - len(marker)
+
+                        await event_emitter({"type": "chat:message", "data": {"content": assistant_message}})
                         continue
 
                     if etype == "response.reasoning_summary_text.done":

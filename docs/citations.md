@@ -1,6 +1,6 @@
 # 📚 Inline Citations in Open WebUI
 
-Open WebUI supports inline citations displayed as numbered references (e.g., `[1]`) within assistant responses. Users can click these references to view detailed source information.
+Open WebUI supports inline citations displayed as numbered references (e.g., `[1]`) within assistant responses. Users can click these references to view detailed source information. The `CITATION_STYLE` valve lets you show the source name instead of a number if desired.
 
 This guide covers:
 
